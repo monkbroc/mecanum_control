@@ -38,7 +38,7 @@ void setup() {
 }
 
 void loop() {
-  Serial.println("a0=%4d a1=%4d a2=%4d a3=%4d a4=%4d a5=%4d b0=%d b1=%d b2=%d b3=%d b4=%d b5=%d b6=%d b7=%d",
+  Serial.printlnf("a0=%4d a1=%4d a2=%4d a3=%4d a4=%4d a5=%4d b0=%d b1=%d b2=%d b3=%d b4=%d b5=%d b6=%d b7=%d",
   joystick[AXIS_0],
   joystick[AXIS_1],
   joystick[AXIS_2],
