@@ -21,10 +21,15 @@ void loop() {
   // Uncomment to debug
   printJoystick();
 
+  updateSpeed();
+
   runSteppers();
 }
 
 // ===== STEPPERS =====
+
+const int minWheelSpeed = 500;
+const int maxWheelSpeed = 1500;
 
 #define STEPPER_MODE_1 A4
 #define STEPPER_MODE_2 A5
@@ -48,55 +53,55 @@ void loop() {
 // AccelStepper stepperLF(AccelStepper::DRIVER, STEPPER_LF_STEP_PIN, STEPPER_LF_DIR_PIN);
 // AccelStepper stepperRF(AccelStepper::DRIVER, STEPPER_RF_STEP_PIN, STEPPER_RF_DIR_PIN);
 // AccelStepper stepperLR(AccelStepper::DRIVER, STEPPER_LR_STEP_PIN, STEPPER_LR_DIR_PIN);
-// AccelStepper stepperRR(AccelStepper::DRIVER, STEPPER_RR_STEP_PIN, STEPPER_RR_DIR_PIN);
+AccelStepper stepperRR(AccelStepper::DRIVER, STEPPER_RR_STEP_PIN, STEPPER_RR_DIR_PIN);
 
 void setupSteppers() {
   pinMode(STEPPER_MODE_1, OUTPUT);
   pinMode(STEPPER_MODE_2, OUTPUT);
   pinMode(STEPPER_MODE_3, OUTPUT);
 
-  // LOW, LOW, LOW = No micro-steps
+  // LLL: Full step
+  // HLL: Half step
+  // LHL: Quarter step
+  // HHL: Eight step
+  // HHH: Sixteenth step
   digitalWrite(STEPPER_MODE_1, HIGH);
   digitalWrite(STEPPER_MODE_2, HIGH);
   digitalWrite(STEPPER_MODE_3, LOW);
 
-  pinMode(STEPPER_RR_DIR_PIN, OUTPUT);
-  pinMode(STEPPER_RR_STEP_PIN, OUTPUT);
-  digitalWrite(STEPPER_RR_DIR_PIN, HIGH);
+  // pinMode(STEPPER_RR_DIR_PIN, OUTPUT);
+  // pinMode(STEPPER_RR_STEP_PIN, OUTPUT);
+  // digitalWrite(STEPPER_RR_DIR_PIN, HIGH);
   
-  // auto accel = 200.0;
-  // auto maxSpeed = 1000.0;
   // stepperLF.setAcceleration(accel);
-  // stepperLF.setMaxSpeed(maxSpeed);
+  // stepperLF.setMaxSpeed(maxWheelSpeed);
   // stepperRF.setAcceleration(accel);
-  // stepperRF.setMaxSpeed(maxSpeed);
+  // stepperRF.setMaxSpeed(maxWheelSpeed);
   // stepperLR.setAcceleration(accel);
-  // stepperLR.setMaxSpeed(maxSpeed);
-  // stepperRR.setAcceleration(accel);
-  // stepperRR.setMaxSpeed(maxSpeed);
+  // stepperLR.setMaxSpeed(maxWheelSpeed);
 
-  // stepperLF.runSpeed();
-  // stepperRF.runSpeed();
-  // stepperLR.runSpeed();
-  // stepperRR.runSpeed();
+  // stepperRR.setAcceleration(accel);
+  stepperRR.setMaxSpeed(maxWheelSpeed);
 }
 
 void runSteppers() {
   // stepperLF.runSpeed();
   // stepperRF.runSpeed();
   // stepperLR.runSpeed();
-  // stepperRR.runSpeed();
+  stepperRR.runSpeed();
 
-  digitalWrite(STEPPER_RR_STEP_PIN, HIGH);
-  delay(1);
-  digitalWrite(STEPPER_RR_STEP_PIN, LOW);
-  delay(1);
+  // digitalWrite(STEPPER_RR_STEP_PIN, HIGH);
+  // delay(1);
+  // digitalWrite(STEPPER_RR_STEP_PIN, LOW);
+  // delay(1);
 }
 
 // ===== JOYSTICK =====
 
 // The Raspberry Pi will write joystick data to I2C on this address
 const auto joystickI2cAddress = 8;
+const int joystickDeadZone = 32;
+const int joystickMax = 127;
 
 enum {
   AXIS_0,
@@ -129,6 +134,10 @@ void updateJoystick(int availableBytes) {
   while (Wire.available() >= 2) {
     uint8_t axis = Wire.read();
     int8_t value = (int8_t) Wire.read();
+    // avoid issues when making value negative
+    if (value > joystickMax) {
+      value = joystickMax;
+    }
 
     joystickReceived = true;
 
@@ -138,9 +147,12 @@ void updateJoystick(int availableBytes) {
   }
 }
 
+int speed = 0;
+
 void printJoystick() {
   if (joystickReceived) {
-    Serial.printlnf("a0=%4d a1=%4d a2=%4d a3=%4d a4=%4d a5=%4d b0=%d b1=%d b2=%d b3=%d b4=%d b5=%d b6=%d b7=%d",
+    Serial.printlnf("speed=%d a0=%4d a1=%4d a2=%4d a3=%4d a4=%4d a5=%4d b0=%d b1=%d b2=%d b3=%d b4=%d b5=%d b6=%d b7=%d",
+    speed,
     joystick[AXIS_0],
     joystick[AXIS_1],
     joystick[AXIS_2],
@@ -157,5 +169,27 @@ void printJoystick() {
     joystick[BUTTON_7]
     );
     joystickReceived = false;
+  }
+}
+
+// ==== ROBOT CONTROL LOGIC ====
+
+int linearInterpolate(int val, int x0, int x1, int y0, int y1) {
+  if (val < x0) {
+    return y0;
+  }
+  if (val > x1) {
+    return y1;
+  }
+  return (val - x0) * (y1 - y0) / (x1 - x0) + y0;
+}
+
+void updateSpeed() {
+  if (joystick[AXIS_1] < -joystickDeadZone) {
+    speed = linearInterpolate(-joystick[AXIS_1], joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
+    stepperRR.setSpeed(speed);
+  } else if (joystick[AXIS_1] == 0) {
+    speed = 0;
+    stepperRR.setSpeed(0);
   }
 }
