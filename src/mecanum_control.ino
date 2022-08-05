@@ -50,9 +50,9 @@ const int maxWheelSpeed = 1500;
 #define STEPPER_RR_STEP_PIN D5
 
 // Define some steppers and the pins the will use
-// AccelStepper stepperLF(AccelStepper::DRIVER, STEPPER_LF_STEP_PIN, STEPPER_LF_DIR_PIN);
-// AccelStepper stepperRF(AccelStepper::DRIVER, STEPPER_RF_STEP_PIN, STEPPER_RF_DIR_PIN);
-// AccelStepper stepperLR(AccelStepper::DRIVER, STEPPER_LR_STEP_PIN, STEPPER_LR_DIR_PIN);
+AccelStepper stepperLF(AccelStepper::DRIVER, STEPPER_LF_STEP_PIN, STEPPER_LF_DIR_PIN);
+AccelStepper stepperLR(AccelStepper::DRIVER, STEPPER_LR_STEP_PIN, STEPPER_LR_DIR_PIN);
+AccelStepper stepperRF(AccelStepper::DRIVER, STEPPER_RF_STEP_PIN, STEPPER_RF_DIR_PIN);
 AccelStepper stepperRR(AccelStepper::DRIVER, STEPPER_RR_STEP_PIN, STEPPER_RR_DIR_PIN);
 
 void setupSteppers() {
@@ -69,31 +69,21 @@ void setupSteppers() {
   digitalWrite(STEPPER_MODE_2, HIGH);
   digitalWrite(STEPPER_MODE_3, LOW);
 
-  // pinMode(STEPPER_RR_DIR_PIN, OUTPUT);
-  // pinMode(STEPPER_RR_STEP_PIN, OUTPUT);
-  // digitalWrite(STEPPER_RR_DIR_PIN, HIGH);
-  
-  // stepperLF.setAcceleration(accel);
-  // stepperLF.setMaxSpeed(maxWheelSpeed);
-  // stepperRF.setAcceleration(accel);
-  // stepperRF.setMaxSpeed(maxWheelSpeed);
-  // stepperLR.setAcceleration(accel);
-  // stepperLR.setMaxSpeed(maxWheelSpeed);
+  // Left side is inverted
+  stepperLF.setPinsInverted(true);
+  stepperLR.setPinsInverted(true);
 
-  // stepperRR.setAcceleration(accel);
+  stepperLF.setMaxSpeed(maxWheelSpeed);
+  stepperLR.setMaxSpeed(maxWheelSpeed);
+  stepperRF.setMaxSpeed(maxWheelSpeed);
   stepperRR.setMaxSpeed(maxWheelSpeed);
 }
 
 void runSteppers() {
-  // stepperLF.runSpeed();
-  // stepperRF.runSpeed();
-  // stepperLR.runSpeed();
+  stepperLF.runSpeed();
+  stepperLR.runSpeed();
+  stepperRF.runSpeed();
   stepperRR.runSpeed();
-
-  // digitalWrite(STEPPER_RR_STEP_PIN, HIGH);
-  // delay(1);
-  // digitalWrite(STEPPER_RR_STEP_PIN, LOW);
-  // delay(1);
 }
 
 // ===== JOYSTICK =====
@@ -147,12 +137,9 @@ void updateJoystick(int availableBytes) {
   }
 }
 
-int speed = 0;
-
 void printJoystick() {
   if (joystickReceived) {
-    Serial.printlnf("speed=%d a0=%4d a1=%4d a2=%4d a3=%4d a4=%4d a5=%4d b0=%d b1=%d b2=%d b3=%d b4=%d b5=%d b6=%d b7=%d",
-    speed,
+    Serial.printlnf("a0=%4d a1=%4d a2=%4d a3=%4d a4=%4d a5=%4d b0=%d b1=%d b2=%d b3=%d b4=%d b5=%d b6=%d b7=%d",
     joystick[AXIS_0],
     joystick[AXIS_1],
     joystick[AXIS_2],
@@ -185,11 +172,79 @@ int linearInterpolate(int val, int x0, int x1, int y0, int y1) {
 }
 
 void updateSpeed() {
-  if (joystick[AXIS_1] < -joystickDeadZone) {
-    speed = linearInterpolate(-joystick[AXIS_1], joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
-    stepperRR.setSpeed(speed);
-  } else if (joystick[AXIS_1] == 0) {
-    speed = 0;
-    stepperRR.setSpeed(0);
+  int forward = -joystick[AXIS_1];
+  int sideways = joystick[AXIS_0];
+  int rotate = joystick[AXIS_5];
+
+  bool shouldForward = abs(forward) > joystickDeadZone;
+  bool shouldSideways = abs(sideways) > joystickDeadZone;
+  bool shouldRotate = abs(rotate) > joystickDeadZone;
+
+  if (shouldRotate) {
+    rotateBy(rotate);
+  } else if (shouldForward && shouldSideways) {
+    moveDiagonalBy(forward, sideways);
+  } else if (shouldForward) {
+    moveForwardBy(forward);
+  } else if (shouldSideways) {
+    moveSidewaysBy(sideways);
+  } else {
+    stopMoving();
   }
+}
+
+void rotateBy(int rotate) {
+  int speed = linearInterpolate(abs(rotate), joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
+  if (rotate < 0) {
+    speed = -speed;
+  }
+  stepperLF.setSpeed(speed);
+  stepperLR.setSpeed(speed);
+  stepperRF.setSpeed(-speed);
+  stepperRR.setSpeed(-speed);
+}
+
+void moveDiagonalBy(int forward, int sideways) {
+  int fspeed = linearInterpolate(abs(forward), joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
+  if (forward < 0) {
+    fspeed = -fspeed;
+  }
+  int sspeed = linearInterpolate(abs(sideways), joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
+  if (sideways < 0) {
+    sspeed = -sspeed;
+  }
+
+  stepperLF.setSpeed((fspeed + sspeed) / 2);
+  stepperLR.setSpeed((fspeed + sspeed) / 2);
+  stepperRF.setSpeed((fspeed - sspeed) / 2);
+  stepperRR.setSpeed((fspeed - sspeed) / 2);
+}
+
+void moveForwardBy(int forward) {
+  int speed = linearInterpolate(abs(forward), joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
+  if (forward < 0) {
+    speed = -speed;
+  }
+  stepperLF.setSpeed(speed);
+  stepperLR.setSpeed(speed);
+  stepperRF.setSpeed(speed);
+  stepperRR.setSpeed(speed);
+}
+
+void moveSidewaysBy(int sideways) {
+  int speed = linearInterpolate(abs(sideways), joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
+  if (sideways < 0) {
+    speed = -speed;
+  }
+  stepperLF.setSpeed(speed);
+  stepperLR.setSpeed(-speed);
+  stepperRF.setSpeed(-speed);
+  stepperRR.setSpeed(speed);
+}
+
+void stopMoving() {
+  stepperLF.setSpeed(0);
+  stepperLR.setSpeed(0);
+  stepperRF.setSpeed(0);
+  stepperRR.setSpeed(0);
 }
