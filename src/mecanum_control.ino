@@ -161,14 +161,30 @@ void printJoystick() {
 
 // ==== ROBOT CONTROL LOGIC ====
 
-int linearInterpolate(int val, int x0, int x1, int y0, int y1) {
-  if (val < x0) {
-    return y0;
-  }
-  if (val > x1) {
+int linearInterpolate(int x, int x1, int x2, int y1, int y2) {
+  if (x < x1) {
     return y1;
   }
-  return (val - x0) * (y1 - y0) / (x1 - x0) + y0;
+  if (x > x2) {
+    return y2;
+  }
+  return (x - x1) * (y2 - y1) / (x2 - x1) + y1;
+}
+
+/*
+ 2D linear interpolation
+ The parameters are:
+ z11 is at x1, y1
+ z12 is at x1, y2
+ z22 is at x2, y2
+ z21 is at x2, y1
+
+ It calculates the linear interpolation on the x axis at y1, the interpolation on the x axis at y2, then interpolates between these 2
+*/
+int linearInterpolate2D(int x, int y, int x1, int x2, int y1, int y2, int z11, int z12, int z22, int z21) {
+  int zy1 = linearInterpolate(x, x1, x2, z11, z21);
+  int zy2 = linearInterpolate(x, x1, x2, z12, z22);
+  return linearInterpolate(y, y1, y2, zy1, zy2);
 }
 
 void updateSpeed() {
@@ -204,20 +220,32 @@ void rotateBy(int rotate) {
   stepperRR.setSpeed(-speed);
 }
 
+/*
+  To move diagonally right forward, calculate the speed of pairs of wheels using 2D linear interpolation
+  LF and RR wheels
+               | 0% sideways | 100% sideways
+  100% forward | max speed   | max speed
+  0% forward   | min speed   | max speed
+   
+  LR and RF wheels
+               | 0% sideways | 100% sideways
+  100% forward | max speed   | 0
+  0% forward   | 0           | -max speed
+*/
 void moveDiagonalBy(int forward, int sideways) {
-  int fspeed = linearInterpolate(abs(forward), joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
-  if (forward < 0) {
-    fspeed = -fspeed;
-  }
-  int sspeed = linearInterpolate(abs(sideways), joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed);
-  if (sideways < 0) {
-    sspeed = -sspeed;
+  int speed1 = linearInterpolate2D(abs(forward), abs(sideways), joystickDeadZone, joystickMax, joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed, maxWheelSpeed, maxWheelSpeed);
+  int speed2 = linearInterpolate2D(abs(forward), abs(sideways), joystickDeadZone, joystickMax, joystickDeadZone, joystickMax, 0, maxWheelSpeed, 0, -maxWheelSpeed);
+  if (abs(speed2) < minWheelSpeed) {
+    speed2 = 0;
   }
 
-  stepperLF.setSpeed((fspeed + sspeed) / 2);
-  stepperLR.setSpeed((fspeed + sspeed) / 2);
-  stepperRF.setSpeed((fspeed - sspeed) / 2);
-  stepperRR.setSpeed((fspeed - sspeed) / 2);
+  if (forward > 0 && sideways > 0) {
+    stepperLF.setSpeed(speed1);
+    stepperLR.setSpeed(speed2);
+    stepperRF.setSpeed(speed2);
+    stepperRR.setSpeed(speed1);
+  }
+  // TODO forward left, backward right, backward left
 }
 
 void moveForwardBy(int forward) {
