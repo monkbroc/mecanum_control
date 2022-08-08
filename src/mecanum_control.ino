@@ -9,12 +9,15 @@
 
 SYSTEM_THREAD(ENABLED);
 
+String debug;
 void setup() {
   Serial.begin();
 
   setupJoystick();
 
   setupSteppers();
+
+  Particle.variable("debug", debug);
 }
 
 void loop() {
@@ -29,7 +32,8 @@ void loop() {
 // ===== STEPPERS =====
 
 const int minWheelSpeed = 500;
-const int maxWheelSpeed = 1500;
+const int maxWheelSpeed = 3000;
+const int speedChange = 10;
 
 const system_tick_t sleepTimer = 30000;
 #define STEPPER_SLEEP_PIN D6
@@ -58,6 +62,52 @@ AccelStepper stepperLF(AccelStepper::DRIVER, STEPPER_LF_STEP_PIN, STEPPER_LF_DIR
 AccelStepper stepperLR(AccelStepper::DRIVER, STEPPER_LR_STEP_PIN, STEPPER_LR_DIR_PIN);
 AccelStepper stepperRF(AccelStepper::DRIVER, STEPPER_RF_STEP_PIN, STEPPER_RF_DIR_PIN);
 AccelStepper stepperRR(AccelStepper::DRIVER, STEPPER_RR_STEP_PIN, STEPPER_RR_DIR_PIN);
+
+class TargetStepper {
+private:
+  int targetSpeed;
+  int speed;
+  AccelStepper &stepper;
+
+public:
+  TargetStepper(AccelStepper &stepper) : targetSpeed(0), speed(0), stepper(stepper) {}
+
+  void setTargetSpeed(int value) {
+    targetSpeed = value;
+  }
+
+  void runSpeed() {
+    // If starting, go to minimum speed and take the first step
+    if (speed == 0 && targetSpeed != 0) {
+      speed = targetSpeed > 0 ? minWheelSpeed : -minWheelSpeed;
+
+      stepper.setSpeed(speed);
+      stepper.runSpeed();
+    } else {
+      // wait for the next step, then update the speed
+      bool didStep = stepper.runSpeed();
+      
+      if (didStep) {
+        if (targetSpeed > speed) {
+          speed += speedChange;
+        } else if (targetSpeed < speed) {
+          speed -= speedChange;
+        }
+        if (abs(speed) < minWheelSpeed) {
+          speed = 0;
+        }
+        stepper.setSpeed(speed);
+      }
+    }
+
+    debug = String::format("t=%d s=%d", targetSpeed, speed);
+  }
+};
+
+TargetStepper targetStepperLF(stepperLF);
+TargetStepper targetStepperLR(stepperLR);
+TargetStepper targetStepperRF(stepperRF);
+TargetStepper targetStepperRR(stepperRR);
 
 void setupSteppers() {
   pinMode(STEPPER_SLEEP_PIN, OUTPUT);
@@ -99,10 +149,10 @@ void stepperSleep(bool motorActive) {
 }
 
 void runSteppers() {
-  stepperLF.runSpeed();
-  stepperLR.runSpeed();
-  stepperRF.runSpeed();
-  stepperRR.runSpeed();
+  targetStepperLF.runSpeed();
+  targetStepperLR.runSpeed();
+  targetStepperRF.runSpeed();
+  targetStepperRR.runSpeed();
 }
 
 // ===== JOYSTICK =====
@@ -194,11 +244,11 @@ int linearInterpolate(int x, int x1, int x2, int y1, int y2) {
 void updateSpeed() {
   int forward = -joystick[AXIS_1];
   int sideways = joystick[AXIS_0];
-  int rotate = joystick[AXIS_5];
+  int rotate = joystick[AXIS_3];
 
   bool shouldForward = abs(forward) > joystickDeadZone;
   bool shouldSideways = abs(sideways) > joystickDeadZone;
-  bool shouldDiagonal = (abs(forward) > joystickDiagonal && shouldSideways) || (abs(sideways) > joystickDiagonal && shouldForward);
+  bool shouldDiagonal = abs(forward) > joystickDiagonal && abs(sideways) > joystickDiagonal;
   bool shouldRotate = abs(rotate) > joystickDeadZone;
 
   bool motorActive = true;
@@ -225,10 +275,10 @@ void rotateBy(int rotate) {
   if (rotate < 0) {
     speed = -speed;
   }
-  stepperLF.setSpeed(speed);
-  stepperLR.setSpeed(speed);
-  stepperRF.setSpeed(-speed);
-  stepperRR.setSpeed(-speed);
+  targetStepperLF.setTargetSpeed(speed);
+  targetStepperLR.setTargetSpeed(speed);
+  targetStepperRF.setTargetSpeed(-speed);
+  targetStepperRR.setTargetSpeed(-speed);
 }
 
 /*
@@ -238,25 +288,25 @@ void moveDiagonalBy(int forward, int sideways) {
   int speed = linearInterpolate(abs(forward) + abs(sideways), 2 * joystickDeadZone, 2 * joystickMax, minWheelSpeed, maxWheelSpeed);
 
   if (sideways > 0 && forward > 0) {
-    stepperLF.setSpeed(speed);
-    stepperLR.setSpeed(0);
-    stepperRF.setSpeed(0);
-    stepperRR.setSpeed(speed);
+    targetStepperLF.setTargetSpeed(speed);
+    targetStepperLR.setTargetSpeed(0);
+    targetStepperRF.setTargetSpeed(0);
+    targetStepperRR.setTargetSpeed(speed);
   } else if (sideways < 0 && forward < 0) {
-    stepperLF.setSpeed(-speed);
-    stepperLR.setSpeed(0);
-    stepperRF.setSpeed(0);
-    stepperRR.setSpeed(-speed);
+    targetStepperLF.setTargetSpeed(-speed);
+    targetStepperLR.setTargetSpeed(0);
+    targetStepperRF.setTargetSpeed(0);
+    targetStepperRR.setTargetSpeed(-speed);
   } else if (sideways < 0 && forward > 0) {
-    stepperLF.setSpeed(0);
-    stepperLR.setSpeed(speed);
-    stepperRF.setSpeed(speed);
-    stepperRR.setSpeed(0);
+    targetStepperLF.setTargetSpeed(0);
+    targetStepperLR.setTargetSpeed(speed);
+    targetStepperRF.setTargetSpeed(speed);
+    targetStepperRR.setTargetSpeed(0);
   } else {
-    stepperLF.setSpeed(0);
-    stepperLR.setSpeed(-speed);
-    stepperRF.setSpeed(-speed);
-    stepperRR.setSpeed(0);
+    targetStepperLF.setTargetSpeed(0);
+    targetStepperLR.setTargetSpeed(-speed);
+    targetStepperRF.setTargetSpeed(-speed);
+    targetStepperRR.setTargetSpeed(0);
   }
 }
 
@@ -265,10 +315,10 @@ void moveForwardBy(int forward) {
   if (forward < 0) {
     speed = -speed;
   }
-  stepperLF.setSpeed(speed);
-  stepperLR.setSpeed(speed);
-  stepperRF.setSpeed(speed);
-  stepperRR.setSpeed(speed);
+  targetStepperLF.setTargetSpeed(speed);
+  targetStepperLR.setTargetSpeed(speed);
+  targetStepperRF.setTargetSpeed(speed);
+  targetStepperRR.setTargetSpeed(speed);
 }
 
 void moveSidewaysBy(int sideways) {
@@ -276,15 +326,15 @@ void moveSidewaysBy(int sideways) {
   if (sideways < 0) {
     speed = -speed;
   }
-  stepperLF.setSpeed(speed);
-  stepperLR.setSpeed(-speed);
-  stepperRF.setSpeed(-speed);
-  stepperRR.setSpeed(speed);
+  targetStepperLF.setTargetSpeed(speed);
+  targetStepperLR.setTargetSpeed(-speed);
+  targetStepperRF.setTargetSpeed(-speed);
+  targetStepperRR.setTargetSpeed(speed);
 }
 
 void stopMoving() {
-  stepperLF.setSpeed(0);
-  stepperLR.setSpeed(0);
-  stepperRF.setSpeed(0);
-  stepperRR.setSpeed(0);
+  targetStepperLF.setTargetSpeed(0);
+  targetStepperLR.setTargetSpeed(0);
+  targetStepperRF.setTargetSpeed(0);
+  targetStepperRR.setTargetSpeed(0);
 }
