@@ -31,10 +31,14 @@ void loop() {
 const int minWheelSpeed = 500;
 const int maxWheelSpeed = 1500;
 
-#define STEPPER_MODE_1 A4
-#define STEPPER_MODE_2 A5
-#define STEPPER_MODE_3 A6
+const system_tick_t sleepTimer = 30000;
+#define STEPPER_SLEEP_PIN D6
+#define SLEEP_OFF HIGH
+#define SLEEP_ON LOW
 
+#define STEPPER_MODE_1_PIN A4
+#define STEPPER_MODE_2_PIN A5
+#define STEPPER_MODE_3_PIN A6
 
 // The Left Front Stepper pins
 #define STEPPER_LF_DIR_PIN A3
@@ -56,18 +60,21 @@ AccelStepper stepperRF(AccelStepper::DRIVER, STEPPER_RF_STEP_PIN, STEPPER_RF_DIR
 AccelStepper stepperRR(AccelStepper::DRIVER, STEPPER_RR_STEP_PIN, STEPPER_RR_DIR_PIN);
 
 void setupSteppers() {
-  pinMode(STEPPER_MODE_1, OUTPUT);
-  pinMode(STEPPER_MODE_2, OUTPUT);
-  pinMode(STEPPER_MODE_3, OUTPUT);
+  pinMode(STEPPER_SLEEP_PIN, OUTPUT);
+  digitalWrite(STEPPER_SLEEP_PIN, SLEEP_ON);
+
+  pinMode(STEPPER_MODE_1_PIN, OUTPUT);
+  pinMode(STEPPER_MODE_2_PIN, OUTPUT);
+  pinMode(STEPPER_MODE_3_PIN, OUTPUT);
 
   // LLL: Full step
   // HLL: Half step
   // LHL: Quarter step
   // HHL: Eight step
   // HHH: Sixteenth step
-  digitalWrite(STEPPER_MODE_1, HIGH);
-  digitalWrite(STEPPER_MODE_2, HIGH);
-  digitalWrite(STEPPER_MODE_3, LOW);
+  digitalWrite(STEPPER_MODE_1_PIN, HIGH);
+  digitalWrite(STEPPER_MODE_2_PIN, HIGH);
+  digitalWrite(STEPPER_MODE_3_PIN, LOW);
 
   // Left side is inverted
   stepperLF.setPinsInverted(true);
@@ -77,6 +84,18 @@ void setupSteppers() {
   stepperLR.setMaxSpeed(maxWheelSpeed);
   stepperRF.setMaxSpeed(maxWheelSpeed);
   stepperRR.setMaxSpeed(maxWheelSpeed);
+}
+
+system_tick_t motorLastActive = 0;
+void stepperSleep(bool motorActive) {
+  if (motorActive) {
+    digitalWrite(STEPPER_SLEEP_PIN, SLEEP_OFF);
+    motorLastActive = millis();
+  } else {
+    if ((millis() - motorLastActive) > sleepTimer) {
+          digitalWrite(STEPPER_SLEEP_PIN, SLEEP_ON);
+    }
+  }
 }
 
 void runSteppers() {
@@ -91,6 +110,7 @@ void runSteppers() {
 // The Raspberry Pi will write joystick data to I2C on this address
 const auto joystickI2cAddress = 8;
 const int joystickDeadZone = 32;
+const int joystickDiagonal = 56;
 const int joystickMax = 127;
 
 enum {
@@ -171,22 +191,6 @@ int linearInterpolate(int x, int x1, int x2, int y1, int y2) {
   return (x - x1) * (y2 - y1) / (x2 - x1) + y1;
 }
 
-/*
- 2D linear interpolation
- The parameters are:
- z11 is at x1, y1
- z12 is at x1, y2
- z22 is at x2, y2
- z21 is at x2, y1
-
- It calculates the linear interpolation on the x axis at y1, the interpolation on the x axis at y2, then interpolates between these 2
-*/
-int linearInterpolate2D(int x, int y, int x1, int x2, int y1, int y2, int z11, int z12, int z22, int z21) {
-  int zy1 = linearInterpolate(x, x1, x2, z11, z21);
-  int zy2 = linearInterpolate(x, x1, x2, z12, z22);
-  return linearInterpolate(y, y1, y2, zy1, zy2);
-}
-
 void updateSpeed() {
   int forward = -joystick[AXIS_1];
   int sideways = joystick[AXIS_0];
@@ -194,11 +198,14 @@ void updateSpeed() {
 
   bool shouldForward = abs(forward) > joystickDeadZone;
   bool shouldSideways = abs(sideways) > joystickDeadZone;
+  bool shouldDiagonal = (abs(forward) > joystickDiagonal && shouldSideways) || (abs(sideways) > joystickDiagonal && shouldForward);
   bool shouldRotate = abs(rotate) > joystickDeadZone;
+
+  bool motorActive = true;
 
   if (shouldRotate) {
     rotateBy(rotate);
-  } else if (shouldForward && shouldSideways) {
+  } else if (shouldDiagonal) {
     moveDiagonalBy(forward, sideways);
   } else if (shouldForward) {
     moveForwardBy(forward);
@@ -206,7 +213,11 @@ void updateSpeed() {
     moveSidewaysBy(sideways);
   } else {
     stopMoving();
+    motorActive = false;
   }
+
+  // after 30 seconds of no activity, turn off the steppers
+  stepperSleep(motorActive);
 }
 
 void rotateBy(int rotate) {
@@ -221,31 +232,32 @@ void rotateBy(int rotate) {
 }
 
 /*
-  To move diagonally right forward, calculate the speed of pairs of wheels using 2D linear interpolation
-  LF and RR wheels
-               | 0% sideways | 100% sideways
-  100% forward | max speed   | max speed
-  0% forward   | min speed   | max speed
-   
-  LR and RF wheels
-               | 0% sideways | 100% sideways
-  100% forward | max speed   | 0
-  0% forward   | 0           | -max speed
-*/
+  To move diagonally, calculate the speed of pairs of wheels using linear interpolation and set the other pair of wheels to 0
+ */
 void moveDiagonalBy(int forward, int sideways) {
-  int speed1 = linearInterpolate2D(abs(forward), abs(sideways), joystickDeadZone, joystickMax, joystickDeadZone, joystickMax, minWheelSpeed, maxWheelSpeed, maxWheelSpeed, maxWheelSpeed);
-  int speed2 = linearInterpolate2D(abs(forward), abs(sideways), joystickDeadZone, joystickMax, joystickDeadZone, joystickMax, 0, maxWheelSpeed, 0, -maxWheelSpeed);
-  if (abs(speed2) < minWheelSpeed) {
-    speed2 = 0;
-  }
+  int speed = linearInterpolate(abs(forward) + abs(sideways), 2 * joystickDeadZone, 2 * joystickMax, minWheelSpeed, maxWheelSpeed);
 
-  if (forward > 0 && sideways > 0) {
-    stepperLF.setSpeed(speed1);
-    stepperLR.setSpeed(speed2);
-    stepperRF.setSpeed(speed2);
-    stepperRR.setSpeed(speed1);
+  if (sideways > 0 && forward > 0) {
+    stepperLF.setSpeed(speed);
+    stepperLR.setSpeed(0);
+    stepperRF.setSpeed(0);
+    stepperRR.setSpeed(speed);
+  } else if (sideways < 0 && forward < 0) {
+    stepperLF.setSpeed(-speed);
+    stepperLR.setSpeed(0);
+    stepperRF.setSpeed(0);
+    stepperRR.setSpeed(-speed);
+  } else if (sideways < 0 && forward > 0) {
+    stepperLF.setSpeed(0);
+    stepperLR.setSpeed(speed);
+    stepperRF.setSpeed(speed);
+    stepperRR.setSpeed(0);
+  } else {
+    stepperLF.setSpeed(0);
+    stepperLR.setSpeed(-speed);
+    stepperRF.setSpeed(-speed);
+    stepperRR.setSpeed(0);
   }
-  // TODO forward left, backward right, backward left
 }
 
 void moveForwardBy(int forward) {
