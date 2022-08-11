@@ -52,13 +52,13 @@ void loop() {
 const int stepperMode[] = { HIGH, HIGH, HIGH };
 const int minWheelSpeed = 500;
 const int maxWheelSpeed = 8000;
-const int forwardAcceleration = 10;
-const int rotateAcceleration = 8;
-const int sidewaysAcceleration = 4;
-const int diagonalAcceleration = 8;
-const int deceleration = 10;
+const int forwardAcceleration = 50;
+const int rotateAcceleration = 40;
+const int sidewaysAcceleration = 20;
+const int diagonalAcceleration = 40;
+const int deceleration = 50;
 
-
+#define ACCELERATION_INTERVAL 1
 const system_tick_t sleepTimer = 30000;
 #define STEPPER_SLEEP_PIN D6
 #define SLEEP_OFF HIGH
@@ -105,29 +105,28 @@ public:
     acceleration = value;
   }
 
-  void runSpeed() {
-    // If starting, go to minimum speed and take the first step
-    if (speed == 0 && targetSpeed != 0) {
-      speed = targetSpeed > 0 ? minWheelSpeed : -minWheelSpeed;
-
-      stepper.setSpeed(speed);
-      stepper.runSpeed();
-    } else {
-      // wait for the next step, then update the speed
-      bool didStep = stepper.runSpeed();
-      
-      if (didStep) {
-        if (targetSpeed > speed) {
+  void accelerate() {
+    if (speed != targetSpeed) {
+      if (targetSpeed > speed) {
           speed += acceleration;
         } else if (targetSpeed < speed) {
           speed -= acceleration;
         }
+
+        // If starting, go to minimum speed
         if (abs(speed) < minWheelSpeed) {
-          speed = 0;
+          if (targetSpeed == 0) {
+            speed = 0;
+          } else {
+            speed = speed > 0 ? minWheelSpeed : -minWheelSpeed;
+          }
         }
         stepper.setSpeed(speed);
-      }
     }
+  }
+
+  void runSpeed() {
+    stepper.runSpeed();
   }
 };
 
@@ -176,6 +175,15 @@ void stepperSleep(bool motorActive) {
 }
 
 void runSteppers() {
+  static auto lastAcceleration = millis();
+  if (millis() - lastAcceleration > ACCELERATION_INTERVAL) {
+    lastAcceleration = millis();
+
+    targetStepperLF.accelerate();
+    targetStepperLR.accelerate();
+    targetStepperRF.accelerate();
+    targetStepperRR.accelerate();
+  }
   targetStepperLF.runSpeed();
   targetStepperLR.runSpeed();
   targetStepperRF.runSpeed();
